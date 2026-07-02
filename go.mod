@@ -1,4 +1,4 @@
-module template
+module github.com/alpha-omega-corp/_core
 
 go 1.25.0
 

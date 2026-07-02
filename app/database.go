@@ -15,10 +15,14 @@ type DatabaseHandler struct {
 	dbOnce sync.Once
 	db     *bun.DB
 
+	models []any
 	config DatabaseConfig
 }
 
 func NewDatabaseHandler(config DatabaseConfig) *DatabaseHandler {
+	app.models = append(app.models, append(models)...)
+	app.db.RegisterModel(app.models...)
+
 	return &DatabaseHandler{
 		config: config,
 	}
