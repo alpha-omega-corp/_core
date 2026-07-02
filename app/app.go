@@ -8,7 +8,6 @@ import (
 	"os/signal"
 	"syscall"
 
-	"github.com/alpha-omega-corp/_core/command"
 	"github.com/uptrace/bun"
 	"github.com/uptrace/bunrouter"
 	"github.com/urfave/cli/v3"
@@ -24,13 +23,15 @@ type App struct {
 	fs embed.FS
 }
 
+type StartFunc func(db *bun.DB, router *bunrouter.Router, config *Config)
+
 func NewApp(efs embed.FS, models ...any) *App {
 	config, err := LoadConfig(efs)
 	if err != nil {
 		log.Fatalf("load config error: %v\n", err)
 	}
 
-	dbHandler := NewDatabaseHandler(config.Database)
+	dbHandler := NewDatabaseHandler(config.Database, models)
 
 	return &App{
 		config:    config,
@@ -38,14 +39,13 @@ func NewApp(efs embed.FS, models ...any) *App {
 	}
 }
 
-func (app *App) Bootstrap() os.Signal {
-
-	cmd := command.NewCommandHandler(app)
+func (app *App) Bootstrap(start StartFunc) os.Signal {
+	cmd := NewCommandHandler(app.config, app.dbHandler)
 
 	appCli := &cli.Command{
 		Usage: "application cli",
 		Commands: []*cli.Command{
-			cmd.StartServer(),
+			cmd.StartServer(start),
 			cmd.RunMigrations(),
 		},
 	}
@@ -64,16 +64,4 @@ func (app *App) Bootstrap() os.Signal {
 	)
 
 	return <-ch
-}
-
-func (app *App) GetDb() *bun.DB {
-	return app.db
-}
-
-func (app *App) GetModels() []any {
-	return app.models
-}
-
-func (app *App) GetConfig() *Config {
-	return app.config
 }
