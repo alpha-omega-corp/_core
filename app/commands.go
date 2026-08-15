@@ -2,11 +2,15 @@ package app
 
 import (
 	"context"
+	"embed"
 	"fmt"
+	"io/fs"
 	"log"
 	"net/http"
 	"os"
+	"os/signal"
 	"reflect"
+	"syscall"
 	"time"
 
 	"github.com/uptrace/bun"
@@ -19,21 +23,23 @@ import (
 	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 )
 
-type Handler struct {
+type CommandHandler struct {
 	db     *bun.DB
 	models []interface{}
 	config *Config
+	fs     embed.FS
 }
 
-func NewCommandHandler(config *Config, dbHandler *DatabaseHandler) *Handler {
-	return &Handler{
-		db:     dbHandler.Db(),
-		models: dbHandler.models,
+func NewCommandHandler(config *Config, db *bun.DB, efs embed.FS, models []interface{}) *CommandHandler {
+	return &CommandHandler{
+		db:     db,
+		models: models,
 		config: config,
+		fs:     efs,
 	}
 }
 
-func (h *Handler) StartServer(start StartFunc) *cli.Command {
+func (h *CommandHandler) StartServer(start StartFunc) *cli.Command {
 	return h.createCommand("app", "server", func(ctx context.Context, cmd *cli.Command) {
 		router := bunrouter.New(
 			bunrouter.WithMiddleware(reqlog.NewMiddleware(
@@ -45,11 +51,13 @@ func (h *Handler) StartServer(start StartFunc) *cli.Command {
 				bunrouterotel.WithClientIP(),
 			)))
 
-		start(h.db, router, h.config)
+		start(router, Deps{DB: h.db, Config: h.config})
 
 		handler := otelhttp.NewHandler(router, "")
+		host := fmt.Sprintf("%s:%d", h.config.Server.Host, h.config.Server.Port)
+
 		httpSrv := &http.Server{
-			Addr:         h.config.Server.Host,
+			Addr:         host,
 			ReadTimeout:  60 * time.Second,
 			WriteTimeout: 60 * time.Second,
 			IdleTimeout:  60 * time.Second,
@@ -63,10 +71,20 @@ func (h *Handler) StartServer(start StartFunc) *cli.Command {
 		}()
 
 		fmt.Printf("listening on http://%s\n", httpSrv.Addr)
+
+		ch := make(chan os.Signal, 3)
+		signal.Notify(
+			ch,
+			syscall.SIGINT,
+			syscall.SIGQUIT,
+			syscall.SIGTERM,
+		)
+
+		<-ch
 	})
 }
 
-func (h *Handler) RunMigrations() *cli.Command {
+func (h *CommandHandler) RunMigrations() *cli.Command {
 	return h.createCommand("db", "migration", func(ctx context.Context, cmd *cli.Command) {
 		migrator := migrate.NewMigrator(h.db, migrate.NewMigrations())
 		if err := migrator.Init(ctx); err != nil {
@@ -76,15 +94,21 @@ func (h *Handler) RunMigrations() *cli.Command {
 			panic(err)
 		}
 
+		fixturesFS, err := fs.Sub(h.fs, "fixtures")
+		if err != nil {
+			panic(err)
+		}
+
 		fixture := dbfixture.New(h.db)
-		if err := fixture.Load(ctx, os.DirFS("cmd/fixtures"), "fixture.yml"); err != nil {
+		if err := fixture.Load(ctx, fixturesFS, "fixture.yml"); err != nil {
 			fmt.Printf("load fixture error: %v\n", err)
 			panic(err)
 		}
 	})
 }
 
-func (h *Handler) SyncModels() *cli.Command {
+// RunMigrationUpdate Create an updated state. Update existing table structures.
+func (h *CommandHandler) RunMigrationUpdate() *cli.Command {
 	return h.createCommand("db", "sync", func(ctx context.Context, cmd *cli.Command) {
 		for _, model := range h.models {
 			if _, err := h.db.NewCreateTable().Model(model).IfNotExists().Exec(ctx); err != nil {
@@ -93,7 +117,7 @@ func (h *Handler) SyncModels() *cli.Command {
 
 			table := h.db.Table(reflect.TypeOf(model).Elem())
 
-			// Columns the live table already has.
+			// Find existing tables
 			var currentColumns []string
 			if err := h.db.NewSelect().
 				ColumnExpr("column_name").
@@ -108,7 +132,7 @@ func (h *Handler) SyncModels() *cli.Command {
 				have[c] = true
 			}
 
-			// Add any model column missing from the table. New columns are added
+			// Add missing model column
 			for _, column := range table.Fields {
 				if have[column.Name] {
 					continue
@@ -131,12 +155,11 @@ func (h *Handler) SyncModels() *cli.Command {
 	})
 }
 
-func (h *Handler) createCommand(category string, name string, action func(ctx context.Context, cmd *cli.Command)) *cli.Command {
+func (h *CommandHandler) createCommand(category string, name string, action func(ctx context.Context, cmd *cli.Command)) *cli.Command {
 	return &cli.Command{
 		Name:     name,
 		Category: category,
 		Action: func(ctx context.Context, cmd *cli.Command) error {
-
 			action(ctx, cmd)
 
 			return nil

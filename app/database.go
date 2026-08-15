@@ -19,10 +19,9 @@ type DatabaseHandler struct {
 	config DatabaseConfig
 }
 
-func NewDatabaseHandler(config DatabaseConfig, models []any) *DatabaseHandler {
+func NewDatabaseHandler(config DatabaseConfig) *DatabaseHandler {
 	return &DatabaseHandler{
 		config: config,
-		models: models,
 	}
 }
 
@@ -52,8 +51,6 @@ func (h *DatabaseHandler) Db() *bun.DB {
 
 		h.db = db
 	})
-
-	h.db.RegisterModel(h.models)
 
 	return h.db
 }
