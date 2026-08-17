@@ -196,7 +196,7 @@ the one doing the work — and owns the encoding, the status and the error path:
 
 ```go
 func (c *SlotController) GetAll() bunrouter.HandlerFunc {
-	return app.HttpResponse(func(req bunrouter.Request) ([]handlers.Slot, error) {
+	return app.HttpResponse(func(w http.ResponseWriter, req bunrouter.Request) ([]handlers.Slot, error) {
 		return c.Handler().Available(req.Context(), time.Now())
 	})
 }
@@ -207,8 +207,21 @@ Two things it buys over the old two-closure form:
 - **`T` is the type the handler already returns**, value or pointer. `helpers.Response` fixed it at
   `*T`, so a handler returning `[]Slot` had to assign, nil-check and address-take across three lines
   the encoder never needed.
-- **`req` is in scope**, so a route keyed by something other than `:id` stays in this form:
-  `req.Param("reference")`, a header, a query string.
+- **`w` and `req` are both in scope**, so a route keyed by something other than `:id` stays in this
+  form — `req.Param("reference")`, a header, a query string — and so do the decoding primitives,
+  which take the pair:
+
+```go
+return app.HttpResponse(func(w http.ResponseWriter, req bunrouter.Request) (*models.Meat, error) {
+	params := helpers.GetParams[helpers.GetOne](w, req)
+	body := helpers.GetBody[handlers.MeatBody](w, req)
+
+	return c.Handler().Update(req.Context(), params.Id, body)
+})
+```
+
+`GetParams`/`GetBody` report their own failure and still hand back a zero value (see Sharp edges), so
+a handler that cannot proceed on one should return `HttpFail` rather than run on the zero.
 
 Errors returned from the closure are **500** unless tagged. Tag the ones the caller could have
 avoided, and the controller never touches the `ResponseWriter`:

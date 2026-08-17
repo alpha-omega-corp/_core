@@ -28,7 +28,7 @@ encoder can run after it — around a single line of actual work:
 
 There is one closure here, and it is the one doing the work:
 
-	return HttpResponse(func(req bunrouter.Request) ([]handlers.Slot, error) {
+	return HttpResponse(func(w http.ResponseWriter, req bunrouter.Request) ([]handlers.Slot, error) {
 		return c.Handler().Available(req.Context(), time.Now())
 	})
 
@@ -36,13 +36,21 @@ T is the response type exactly as the handler returns it, value or pointer.
 The old form fixed it at *T, which is why the slice above had to be assigned,
 address-taken and returned in three lines the JSON encoder never needed.
 
-fn receives the whole request rather than a context, so a route that reads a
-param or a header stays inside this form instead of dropping back to a
-hand-written handler for the sake of one call.
+fn receives the same pair bunrouter hands a handler, so the helpers that decode
+a request take it directly and a route that needs one stays inside this form:
+
+	return HttpResponse(func(w http.ResponseWriter, req bunrouter.Request) (*handlers.Meat, error) {
+		body := helpers.GetBody[handlers.MeatBody](w, req)
+		return c.Handler().Create(req.Context(), body)
+	})
+
+Those helpers report their own failure and still return a zero value, so a
+handler that cannot proceed on one should say so — returning HttpFail keeps
+the status the caller gets from depending on which write landed last.
 */
-func HttpResponse[T any](fn func(req bunrouter.Request) (T, error)) bunrouter.HandlerFunc {
+func HttpResponse[T any](fn func(w http.ResponseWriter, req bunrouter.Request) (T, error)) bunrouter.HandlerFunc {
 	return func(w http.ResponseWriter, req bunrouter.Request) error {
-		res, err := fn(req)
+		res, err := fn(w, req)
 		if err != nil {
 			helpers.Error(w, err, HttpStatus(err))
 

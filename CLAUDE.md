@@ -74,10 +74,12 @@ main.go  →  StartFunc  →  Controller  →  Handler  →  Repository[E]  → 
 - **`repository.go`** — `Repository[E]` / `NewRepository[E](db)`: generic `bun`-backed CRUD
   (`GetOne`, `GetOneBy`, `GetAll` with relations + a query tweak func, `Create`, `Update`, `Delete`).
 
-- **`http.go`** — `HttpResponse[T](fn func(bunrouter.Request) (T, error))` collapses the two nested
-  closures a route used to need into the one doing the work. `T` is the response type as the handler
-  returns it, value or pointer — unlike `helpers.Response`, which fixed it at `*T` and made
-  value-returning handlers assign-and-address-take for nothing. `HttpFail(code, err)` /
+- **`http.go`** — `HttpResponse[T](fn func(http.ResponseWriter, bunrouter.Request) (T, error))`
+  collapses the two nested closures a route used to need into the one doing the work. `T` is the
+  response type as the handler returns it, value or pointer — unlike `helpers.Response`, which fixed
+  it at `*T` and made value-returning handlers assign-and-address-take for nothing. The closure gets
+  the same `(w, req)` pair bunrouter hands a handler, so `helpers.GetParams` / `helpers.GetBody`
+  compose inside it. `HttpFail(code, err)` /
   `HttpError` / `HttpStatus` tag an error with the status to answer it with, so a handler can
   return a 404 without reaching for the `ResponseWriter`; untagged errors are 500.
 

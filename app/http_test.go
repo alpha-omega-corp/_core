@@ -7,10 +7,12 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/alpha-omega-corp/_core/app"
+	"github.com/alpha-omega-corp/_core/helpers"
 	"github.com/uptrace/bunrouter"
 )
 
@@ -50,7 +52,7 @@ func TestHttpResponseEncodesValues(t *testing.T) {
 	handler := &slotHandler{}
 	now := time.Date(2026, 8, 13, 9, 0, 0, 0, time.UTC)
 
-	rec := serve(t, app.HttpResponse(func(req bunrouter.Request) ([]Slot, error) {
+	rec := serve(t, app.HttpResponse(func(_ http.ResponseWriter, req bunrouter.Request) ([]Slot, error) {
 		return handler.Available(req.Context(), now)
 	}))
 
@@ -72,7 +74,7 @@ func TestHttpResponseEncodesValues(t *testing.T) {
 func TestHttpResponseUntaggedErrorIs500(t *testing.T) {
 	handler := &slotHandler{err: errors.New("query failed")}
 
-	rec := serve(t, app.HttpResponse(func(req bunrouter.Request) ([]Slot, error) {
+	rec := serve(t, app.HttpResponse(func(_ http.ResponseWriter, req bunrouter.Request) ([]Slot, error) {
 		return handler.Available(req.Context(), time.Now())
 	}))
 
@@ -91,7 +93,7 @@ func TestHttpResponseTaggedErrorKeepsStatus(t *testing.T) {
 		err: fmt.Errorf("available: %w", app.HttpFail(http.StatusNotFound, errors.New("no such shop"))),
 	}
 
-	rec := serve(t, app.HttpResponse(func(req bunrouter.Request) ([]Slot, error) {
+	rec := serve(t, app.HttpResponse(func(_ http.ResponseWriter, req bunrouter.Request) ([]Slot, error) {
 		return handler.Available(req.Context(), time.Now())
 	}))
 
@@ -104,7 +106,7 @@ func TestHttpResponseTaggedErrorKeepsStatus(t *testing.T) {
 // in this form.
 func TestHttpResponseReadsRequest(t *testing.T) {
 	router := bunrouter.New()
-	router.GET("/orders/:reference", app.HttpResponse(func(req bunrouter.Request) (string, error) {
+	router.GET("/orders/:reference", app.HttpResponse(func(_ http.ResponseWriter, req bunrouter.Request) (string, error) {
 		return req.Param("reference"), nil
 	}))
 
@@ -113,5 +115,28 @@ func TestHttpResponseReadsRequest(t *testing.T) {
 
 	if got := rec.Body.String(); got != "\"AB-1234\"\n" {
 		t.Fatalf("body = %q, want the reference", got)
+	}
+}
+
+// The ResponseWriter is in scope, so the decoding helpers compose with this
+// form instead of forcing the route back to a hand-written handler.
+func TestHttpResponseDecodesWithHelpers(t *testing.T) {
+	type body struct {
+		Name string `json:"name"`
+	}
+
+	router := bunrouter.New()
+	router.POST("/meats/:id", app.HttpResponse(func(w http.ResponseWriter, req bunrouter.Request) (string, error) {
+		params := helpers.GetParams[helpers.GetOne](w, req)
+		data := helpers.GetBody[body](w, req)
+
+		return fmt.Sprintf("%d:%s", params.Id, data.Name), nil
+	}))
+
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/meats/7", strings.NewReader(`{"name":"rib"}`)))
+
+	if got := rec.Body.String(); got != "\"7:rib\"\n" {
+		t.Fatalf("body = %q, want the id and name the helpers decoded", got)
 	}
 }
